@@ -12,6 +12,8 @@ kubernetes CNI Plugin cilium, cilium 을 활용한 multiClustering
 
 # 1. 개요
 
+## 1) 개요
+
 Cilium Cluster Mesh를 통해 멀티 클러스터를 원할하게 연결할 수 있다.
 
 
@@ -24,7 +26,7 @@ Cilium Cluster Mesh를 통해 멀티 클러스터를 원할하게 연결할 수 
 
 
 
-## Cluster별 HA 구성
+## 2) Cluster별 HA 구성
 
 * 클러스터간 동일한 Namespace 를 가진 서비스를 글로벌 서비스로 자동  병합 함
 
@@ -44,6 +46,28 @@ Cilium Cluster Mesh를 통해 멀티 클러스터를 원할하게 연결할 수 
 ![다중 클러스터 그림](CiliumMultiCluster.assets/clustermesh-1-984767ca705b693437c8a83be4585557.png)
 
 
+
+
+
+## 3) 관련 링크
+
+
+
+#### cilium Homepage
+
+https://cilium.io/
+
+
+
+#### cilium document
+
+https://docs.cilium.io/en/stable/
+
+
+
+#### kubernetes document 에 소개된 CNI plugin 사용예제 문서
+
+https://kubernetes.io/docs/tasks/administer-cluster/network-policy-provider/
 
 
 
@@ -1173,7 +1197,7 @@ The flow chart below summarizes the overall behavior considering a service prese
 
 
 
-# 7. Verify Redis
+# 4. Verify Redis
 
 
 
