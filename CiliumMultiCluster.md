@@ -536,7 +536,433 @@ $ cilium clustermesh status
 
 
 
-## 1) sample app
+
+## 1) userlist 확인
+
+
+
+### (1) Namespace 생성
+
+```sh
+$ kubectl create --context=$CLUSTER1 namespace song
+  kubectl create --context=$CLUSTER2 namespace song
+
+```
+
+
+
+### (2) userlist yaml 생성
+
+
+
+```sh
+$ cd ~/song/cilium
+
+$ mkdir -p userlist
+  cd userlist
+
+$ cat <<EOF > 11.userlist-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: userlist
+  labels:
+    app: userlist
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: userlist
+  template:
+    metadata:
+      labels:
+        app: userlist
+    spec:
+      containers:
+      - name: userlist
+        image: ssongman/userlist:v1
+        ports:
+        - containerPort: 8181
+EOF
+
+
+$ cat <<EOF > 12.userlist-svc.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: userlist-svc
+  annotations:
+    service.cilium.io/global: "true"    # global LB 설정
+    service.cilium.io/shared: "true"    # remote에 endpoint 공유 여부
+spec:
+  selector:
+    app: userlist
+  ports:
+  - name: http
+    protocol: TCP
+    port: 80
+    targetPort: 8181
+  type: ClusterIP
+EOF
+  
+```
+
+
+
+
+
+### (3) Deploy userlist
+
+```sh
+$ cd ~/song/cilium/userlist
+
+
+# cluster1
+$ kubectl --context=$CLUSTER1 -n song apply -f 11.userlist-deployment.yaml
+  kubectl --context=$CLUSTER1 -n song apply -f 12.userlist-svc.yaml
+
+# cluster2
+$ kubectl --context=$CLUSTER2 -n song apply -f 11.userlist-deployment.yaml
+  kubectl --context=$CLUSTER2 -n song apply -f 12.userlist-svc.yaml
+
+# 확인
+$ kubectl --context=$CLUSTER1 -n song get pod
+  kubectl --context=$CLUSTER2 -n song get pod
+
+
+
+
+# clean up
+
+$ kubectl --context=$CLUSTER1 -n song delete -f 11.userlist-deployment.yaml
+  kubectl --context=$CLUSTER1 -n song delete -f 12.userlist-svc.yaml
+  
+$ kubectl --context=$CLUSTER2 -n song delete -f 11.userlist-deployment.yaml
+  kubectl --context=$CLUSTER2 -n song delete -f 12.userlist-svc.yaml
+  
+  
+```
+
+
+
+
+
+### (4) Deploy curltest
+
+#### deploy sleep
+
+```sh
+$ kubectl create deploy curltest \
+    --context $CLUSTER1 \
+    --namespace song \
+    --image=curlimages/curl -- sleep 365d
+
+  kubectl create deploy curltest \
+    --context $CLUSTER2 \
+    --namespace song \
+    --image=curlimages/curl -- sleep 365d
+
+
+$ kubectl --context $CLUSTER1 -n song get pod
+$ kubectl --context $CLUSTER2 -n song get pod
+
+
+
+## 삭제시...
+$ kubectl -n song delete deploy curltest
+
+
+
+```
+
+
+
+
+
+### (5) Verifying Cross-Cluster Traffic
+
+
+
+#### cluster1 > sleep 에서 userlist호출 시도
+
+```sh
+$ kubectl --context $CLUSTER1 -n song \
+    exec -it deploy/curltest -- sh
+
+$ curl -sS userlist-svc.song.svc:80/users/1
+
+# while 문으로 call
+$ while true;do curl -sS userlist-svc.song.svc:80/users/1;sleep 1; echo; done;
+
+
+```
+
+
+
+#### cluster2 > sleep 에서 userlist호출 시도
+
+```sh
+# 여러번 호출해 보자. v1, v2가 번갈아 보이면 성공
+
+$ kubectl --context $CLUSTER2 -n song \
+    exec -it deploy/curltest -- sh
+
+$ curl -sS userlist-svc.song.svc:80/users/1
+
+# while 문으로 call
+$ while true;do curl -sS userlist-svc.song.svc:80/users/1;sleep 1; echo; done;
+
+
+
+# ok 모두 정상동작
+
+```
+
+
+
+어느 한쪽의 replicas 를 0 으로 변경한다면 양쪽에서 모두 하나의 pod 로만 정상 동작한다.
+
+
+
+
+
+
+
+### (6) service affinity 
+
+
+
+MultiCluster 로의 로드 밸런싱은 경우에 따라서 이상적이지 않을 수 있다.
+
+annotation 을 사용하여 endpoint 대상을지정할 수 있다.
+
+* annotaion
+
+```yaml
+service.cilium.io/affinity: "local|remote|none"
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: rebel-base
+  annotations:
+     service.cilium.io/global: "true"
+     # Possible values:
+     # - local
+     #    preferred endpoints from local cluster if available
+     # - remote
+     #    preferred endpoints from remote cluster if available
+     # none (default)
+     #    no preference. Default behavior if this annotation does not exist
+     service.cilium.io/affinity: "local"
+     
+     
+```
+
+
+
+* 반영
+
+```sh
+# local 로 변경
+$ kubectl --context $CLUSTER1 -n song \
+    annotate service userlist-svc service.cilium.io/affinity=local --overwrite
+
+
+# remote 로 변경
+$ kubectl --context $CLUSTER1 -n song \
+    annotate service userlist-svc service.cilium.io/affinity=remote --overwrite
+
+
+# none 로 변경
+$ kubectl --context $CLUSTER1 -n song \
+    annotate service userlist-svc service.cilium.io/affinity=none --overwrite
+
+
+# annotation 제거
+$ kubectl --context $CLUSTER1 -n song \
+    annotate service userlist-svc service.cilium.io/affinity-  --overwrite
+
+
+```
+
+
+
+remote 로 변경시 preferred 로 선언되었다.
+
+```sh
+$ kubectl exec -n kube-system -ti ds/cilium -- cilium service list --clustermesh-affinity    
+ID   Frontend            Service Type   Backend
+2    10.43.0.10:53       ClusterIP      1 => 10.0.0.164:53 (active)
+3    10.43.0.10:9153     ClusterIP      1 => 10.0.0.164:9153 (active)
+4    10.43.34.32:443     ClusterIP      1 => 10.0.0.33:10250 (active)
+5    10.43.0.1:443       ClusterIP      1 => 172.30.1.89:6443 (active)
+6    10.43.163.230:80    ClusterIP      1 => 10.0.0.59:8000 (active)
+7    10.43.163.230:443   ClusterIP      1 => 10.0.0.59:8443 (active)
+12   10.43.63.76:443     ClusterIP      1 => 172.30.1.89:4244 (active)
+13   10.43.130.72:2379   ClusterIP      1 => 10.0.0.207:2379 (active)
+17   10.43.112.141:80    ClusterIP      1 => 10.0.0.165:8181 (active)
+                                        2 => 10.0.0.239:8181 (active) (preferred)
+
+```
+
+
+
+
+
+
+
+### (7) 서비스 엔드포인트 확인
+
+```sh
+$ kubectl exec -n kube-system -ti ds/cilium -- cilium service list --clustermesh-affinity
+
+Defaulted container "cilium-agent" out of: cilium-agent, config (init), mount-cgroup (init), apply-sysctl-overwrites (init), mount-bpf-fs (init), clean-cilium-state (init), install-cni-binaries (init)
+ID   Frontend            Service Type   Backend
+2    10.43.0.10:53       ClusterIP      1 => 10.0.0.164:53 (active)
+3    10.43.0.10:9153     ClusterIP      1 => 10.0.0.164:9153 (active)
+4    10.43.34.32:443     ClusterIP      1 => 10.0.0.33:10250 (active)
+5    10.43.0.1:443       ClusterIP      1 => 172.30.1.89:6443 (active)
+6    10.43.163.230:80    ClusterIP      1 => 10.0.0.59:8000 (active)
+7    10.43.163.230:443   ClusterIP      1 => 10.0.0.59:8443 (active)
+12   10.43.63.76:443     ClusterIP      1 => 172.30.1.89:4244 (active)
+13   10.43.130.72:2379   ClusterIP      1 => 10.0.0.207:2379 (active)
+17   10.43.112.141:80    ClusterIP      1 => 10.0.0.165:8181 (active)
+                                        2 => 10.0.0.239:8181 (active)
+
+
+
+```
+
+
+
+
+
+### (8) Cleanup
+
+
+
+```sh
+$ cd ~/song/downloadIstio/istio-1.19.0
+
+
+# 1) delete sleep
+kubectl delete --context=$CLUSTER1 -f samples/sleep/sleep.yaml -n song
+kubectl delete --context=$CLUSTER2 -f samples/sleep/sleep.yaml -n song
+
+
+# 2) delete userelist
+kubectl -n song delete --context=$CLUSTER1 deploy userlist
+kubectl -n song delete --context=$CLUSTER2 deploy userlist
+
+# 3) delete userelist service
+kubectl -n song delete --context=$CLUSTER1 svc userlist-svc
+kubectl -n song delete --context=$CLUSTER2 svc userlist-svc
+
+# 4) delete namespace
+kubectl delete --context=$CLUSTER1 namespace song
+kubectl delete --context=$CLUSTER2 namespace song
+
+
+```
+
+
+
+
+
+## 2) cilium 공식 사이트
+
+
+
+https://docs.cilium.io/en/stable/network/clustermesh/services/#gs-clustermesh-services
+
+
+
+### Deploying a Simple Example Service
+
+1. In cluster 1, deploy:
+
+   ```
+   kubectl --context $CLUSTER1 -n song apply -f https://raw.githubusercontent.com/cilium/cilium/1.14.2/examples/kubernetes/clustermesh/global-service-example/cluster1.yaml
+   ```
+
+   
+
+2. In cluster 2, deploy:
+
+   ```
+   kubectl --context $CLUSTER2 -n song apply -f https://raw.githubusercontent.com/cilium/cilium/1.14.2/examples/kubernetes/clustermesh/global-service-example/cluster2.yaml
+   ```
+
+   
+
+3. From either cluster, access the global service:
+
+   ```
+   kubectl --context $CLUSTER1 -n song exec -ti deployment/x-wing -- curl rebel-base
+   ```
+
+   You will see replies from pods in both clusters.
+
+   
+
+4. In cluster 1, add `service.cilium.io/shared="false"` to existing global service
+
+   ```
+   kubectl --context $CLUSTER1 -n song annotate service rebel-base service.cilium.io/shared="false" --overwrite
+   ```
+
+   
+
+5. From cluster 1, access the global service one more time:
+
+   ```
+   kubectl --context $CLUSTER1 -n song exec -ti deployment/x-wing -- curl rebel-base
+   ```
+
+   You will still see replies from pods in both clusters.
+
+   
+
+6. From cluster 2, access the global service again:
+
+   ```
+   kubectl --context $CLUSTER2 -n song exec -ti deployment/x-wing -- curl rebel-base
+   ```
+
+   You will see replies from pods only from cluster 2, as the global service in cluster 1 is no longer shared.
+
+   
+
+7. In cluster 1, remove `service.cilium.io/shared` annotation of existing global service
+
+   ```
+   kubectl --context $CLUSTER1 -n song annotate service rebel-base service.cilium.io/shared-
+   ```
+
+   
+
+8. From either cluster, access the global service:
+
+   ```
+   kubectl --context $CLUSTER1 -n song exec -ti deployment/x-wing -- curl rebel-base
+   ```
+
+   You will see replies from pods in both clusters again.
+
+   
+
+### Global and Shared Services Reference
+
+The flow chart below summarizes the overall behavior considering a service present in two clusters (i.e., Cluster1 and Cluster2), and different combinations of the `service.cilium.io/global` and `service.cilium.io/shared` annotation values. The terminating nodes represent the endpoints used in each combination by the two clusters for the service under examination.
+
+
+
+
+
+## 3) sample app
 
 
 
@@ -767,439 +1193,8 @@ kubectl --context=mk-mig exec -n kube-system -ti ds/cilium -- cilium service lis
 
 
 
-## 2) userlist 확인
-
-
-
-### (1) Namespace 생성
-
-```sh
-$ kubectl create --context=$CLUSTER1 namespace song
-  kubectl create --context=$CLUSTER2 namespace song
-
-```
-
-
-
-### (2) userlist yaml 생성
-
-
-
-```sh
-$ cd ~/song/cilium
-
-$ mkdir -p userlist
-  cd userlist
-
-$ cat <<EOF > 11.userlist-deployment.yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: userlist
-  labels:
-    app: userlist
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: userlist
-  template:
-    metadata:
-      labels:
-        app: userlist
-    spec:
-      containers:
-      - name: userlist
-        image: ssongman/userlist:v1
-        ports:
-        - containerPort: 8181
-EOF
-
-
-$ cat <<EOF > 12.userlist-svc.yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: userlist-svc
-  annotations:
-    io.cilium/global-service: "true"
-    service.cilium.io/global: "true"
-    service.cilium.io/shared="true"
-spec:
-  selector:
-    app: userlist
-  ports:
-  - name: http
-    protocol: TCP
-    port: 80
-    targetPort: 8181
-  type: ClusterIP
-EOF
-  
-```
-
-
-
-
-
-### (3) Deploy userlist
-
-```sh
-$ cd ~/song/cilium/userlist
-
-
-# cluster1
-$ kubectl --context=$CLUSTER1 -n song apply -f 11.userlist-deployment.yaml
-  kubectl --context=$CLUSTER1 -n song apply -f 12.userlist-svc.yaml
-
-# cluster2
-$ kubectl --context=$CLUSTER2 -n song apply -f 11.userlist-deployment.yaml
-  kubectl --context=$CLUSTER2 -n song apply -f 12.userlist-svc.yaml
-
-# 확인
-$ kubectl --context=$CLUSTER1 -n song get pod
-  kubectl --context=$CLUSTER2 -n song get pod
-
-
-
-
-# clean up
-
-$ kubectl --context=$CLUSTER1 -n song delete -f 11.userlist-deployment.yaml
-  kubectl --context=$CLUSTER1 -n song delete -f 12.userlist-svc.yaml
-  
-$ kubectl --context=$CLUSTER2 -n song delete -f 11.userlist-deployment.yaml
-  kubectl --context=$CLUSTER2 -n song delete -f 12.userlist-svc.yaml
-  
-  
-```
-
-
-
-
-
-### (4) Deploy curltest
-
-#### deploy sleep
-
-```sh
-$ kubectl create deploy curltest \
-    --context $CLUSTER1 \
-    --namespace song \
-    --image=curlimages/curl -- sleep 365d
-
-  kubectl create deploy curltest \
-    --context $CLUSTER2 \
-    --namespace song \
-    --image=curlimages/curl -- sleep 365d
-
-
-$ kubectl --context $CLUSTER1 -n song get pod
-$ kubectl --context $CLUSTER2 -n song get pod
-
-
-
-## 삭제시...
-$ kubectl -n song delete deploy curltest
-
-
-
-```
-
-
-
-
-
-### (5) Verifying Cross-Cluster Traffic
-
-
-
-#### cluster1 > sleep 에서 userlist호출 시도
-
-```sh
-$ kubectl --context $CLUSTER1 -n song \
-    exec -it deploy/curltest -- sh
-
-$ curl -sS userlist-svc.song.svc:80/users/1
-
-# while 문으로 call
-$ while true;do curl -sS userlist-svc.song.svc:80/users/1;sleep 1; echo; done;
-
-
-```
-
-
-
-#### cluster2 > sleep 에서 userlist호출 시도
-
-```sh
-# 여러번 호출해 보자. v1, v2가 번갈아 보이면 성공
-
-$ kubectl --context $CLUSTER2 -n song \
-    exec -it deploy/curltest -- sh
-
-$ curl -sS userlist-svc.song.svc:80/users/1
-
-# while 문으로 call
-$ while true;do curl -sS userlist-svc.song.svc:80/users/1;sleep 1; echo; done;
-
-
-
-# ok 모두 정상동작
-
-```
-
-
-
-어느 한쪽의 replicas 를 0 으로 변경한다면 양쪽에서 모두 하나의 pod 로만 정상 동작한다.
-
-
-
-
-
-
-
-### (6) service affinity 
-
-
-
-multicluster 로의 로드 밸런싱은 경우에 따라서 이상적이지 않을 수 있다.
-
-annotation 을 사용하여 endpoint 대상을지정할 수 있다.
-
-* annotaion
-
-```yaml
-service.cilium.io/affinity: "local|remote|none"
-
----
-
-apiVersion: v1
-kind: Service
-metadata:
-  name: rebel-base
-  annotations:
-     service.cilium.io/global: "true"
-     # Possible values:
-     # - local
-     #    preferred endpoints from local cluster if available
-     # - remote
-     #    preferred endpoints from remote cluster if available
-     # none (default)
-     #    no preference. Default behavior if this annotation does not exist
-     service.cilium.io/affinity: "local"
-     
-     
-```
-
-
-
-* 반영
-
-```sh
-# local 로 변경
-$ kubectl --context $CLUSTER1 -n song \
-    annotate service userlist-svc service.cilium.io/affinity=local --overwrite
-
-
-# remote 로 변경
-$ kubectl --context $CLUSTER1 -n song \
-    annotate service userlist-svc service.cilium.io/affinity=remote --overwrite
-
-
-# none 로 변경
-$ kubectl --context $CLUSTER1 -n song \
-    annotate service userlist-svc service.cilium.io/affinity=none --overwrite
-
-
-# annotation 제거
-$ kubectl --context $CLUSTER1 -n song \
-    annotate service userlist-svc service.cilium.io/affinity-  --overwrite
-
-
-```
-
-
-
-remote 로 변경시 preferred 로 선언되었다.
-
-```sh
-$ kubectl exec -n kube-system -ti ds/cilium -- cilium service list --clustermesh-affinity    
-ID   Frontend            Service Type   Backend
-2    10.43.0.10:53       ClusterIP      1 => 10.0.0.164:53 (active)
-3    10.43.0.10:9153     ClusterIP      1 => 10.0.0.164:9153 (active)
-4    10.43.34.32:443     ClusterIP      1 => 10.0.0.33:10250 (active)
-5    10.43.0.1:443       ClusterIP      1 => 172.30.1.89:6443 (active)
-6    10.43.163.230:80    ClusterIP      1 => 10.0.0.59:8000 (active)
-7    10.43.163.230:443   ClusterIP      1 => 10.0.0.59:8443 (active)
-12   10.43.63.76:443     ClusterIP      1 => 172.30.1.89:4244 (active)
-13   10.43.130.72:2379   ClusterIP      1 => 10.0.0.207:2379 (active)
-17   10.43.112.141:80    ClusterIP      1 => 10.0.0.165:8181 (active)
-                                        2 => 10.0.0.239:8181 (active) (preferred)
-
-```
-
-
-
-
-
-
-
-
-
-### (7) 서비스 엔드포인트 확인
-
-```sh
-$ kubectl exec -n kube-system -ti ds/cilium -- cilium service list --clustermesh-affinity
-
-Defaulted container "cilium-agent" out of: cilium-agent, config (init), mount-cgroup (init), apply-sysctl-overwrites (init), mount-bpf-fs (init), clean-cilium-state (init), install-cni-binaries (init)
-ID   Frontend            Service Type   Backend
-2    10.43.0.10:53       ClusterIP      1 => 10.0.0.164:53 (active)
-3    10.43.0.10:9153     ClusterIP      1 => 10.0.0.164:9153 (active)
-4    10.43.34.32:443     ClusterIP      1 => 10.0.0.33:10250 (active)
-5    10.43.0.1:443       ClusterIP      1 => 172.30.1.89:6443 (active)
-6    10.43.163.230:80    ClusterIP      1 => 10.0.0.59:8000 (active)
-7    10.43.163.230:443   ClusterIP      1 => 10.0.0.59:8443 (active)
-12   10.43.63.76:443     ClusterIP      1 => 172.30.1.89:4244 (active)
-13   10.43.130.72:2379   ClusterIP      1 => 10.0.0.207:2379 (active)
-17   10.43.112.141:80    ClusterIP      1 => 10.0.0.165:8181 (active)
-                                        2 => 10.0.0.239:8181 (active)
-
-
-
-```
-
-
-
-
-
-### (8) Cleanup
-
-
-
-```sh
-$ cd ~/song/downloadIstio/istio-1.19.0
-
-
-# 1) delete sleep
-kubectl delete --context=$CLUSTER1 -f samples/sleep/sleep.yaml -n song
-kubectl delete --context=$CLUSTER2 -f samples/sleep/sleep.yaml -n song
-
-
-# 2) delete userelist
-kubectl -n song delete --context=$CLUSTER1 deploy userlist
-kubectl -n song delete --context=$CLUSTER2 deploy userlist
-
-# 3) delete userelist service
-kubectl -n song delete --context=$CLUSTER1 svc userlist-svc
-kubectl -n song delete --context=$CLUSTER2 svc userlist-svc
-
-# 4) delete namespace
-kubectl delete --context=$CLUSTER1 namespace song
-kubectl delete --context=$CLUSTER2 namespace song
-
-
-```
-
-
-
-
-
-## 3) cilium 공식 사이트
-
-
-
-https://docs.cilium.io/en/stable/network/clustermesh/services/#gs-clustermesh-services
-
-
-
-### Deploying a Simple Example Service
-
-1. In cluster 1, deploy:
-
-   ```
-   kubectl --context $CLUSTER1 -n song apply -f https://raw.githubusercontent.com/cilium/cilium/1.14.2/examples/kubernetes/clustermesh/global-service-example/cluster1.yaml
-   ```
-
-   
-
-2. In cluster 2, deploy:
-
-   ```
-   kubectl --context $CLUSTER2 -n song apply -f https://raw.githubusercontent.com/cilium/cilium/1.14.2/examples/kubernetes/clustermesh/global-service-example/cluster2.yaml
-   ```
-
-   
-
-3. From either cluster, access the global service:
-
-   ```
-   kubectl --context $CLUSTER1 -n song exec -ti deployment/x-wing -- curl rebel-base
-   ```
-
-   You will see replies from pods in both clusters.
-
-   
-
-4. In cluster 1, add `service.cilium.io/shared="false"` to existing global service
-
-   ```
-   kubectl --context $CLUSTER1 -n song annotate service rebel-base service.cilium.io/shared="false" --overwrite
-   ```
-
-   
-
-5. From cluster 1, access the global service one more time:
-
-   ```
-   kubectl --context $CLUSTER1 -n song exec -ti deployment/x-wing -- curl rebel-base
-   ```
-
-   You will still see replies from pods in both clusters.
-
-   
-
-6. From cluster 2, access the global service again:
-
-   ```
-   kubectl --context $CLUSTER2 -n song exec -ti deployment/x-wing -- curl rebel-base
-   ```
-
-   You will see replies from pods only from cluster 2, as the global service in cluster 1 is no longer shared.
-
-   
-
-7. In cluster 1, remove `service.cilium.io/shared` annotation of existing global service
-
-   ```
-   kubectl --context $CLUSTER1 -n song annotate service rebel-base service.cilium.io/shared-
-   ```
-
-   
-
-8. From either cluster, access the global service:
-
-   ```
-   kubectl --context $CLUSTER1 -n song exec -ti deployment/x-wing -- curl rebel-base
-   ```
-
-   You will see replies from pods in both clusters again.
-
-   
-
-### Global and Shared Services Reference
-
-The flow chart below summarizes the overall behavior considering a service present in two clusters (i.e., Cluster1 and Cluster2), and different combinations of the `service.cilium.io/global` and `service.cilium.io/shared` annotation values. The terminating nodes represent the endpoints used in each combination by the two clusters for the service under examination.
-
-
-
-
-
-
 
 # 4. Verify Redis
-
-
 
 
 
@@ -2343,13 +2338,13 @@ $ kubectl --context $CLUSTER1 -n redis-system annotate service my-release-redis-
 
 # service.cilium.io/shared: "false"     <-- remote 에 endpoint 공유 여부 
 # cluster1에는 DB가 없으므로 false
-$ kubectl --context $CLUSTER1 -n redis-system annotate service my-release-redis-cluster       service.cilium.io/shared=true --overwrite
-  kubectl --context $CLUSTER1 -n redis-system annotate service my-release-redis-cluster-0-svc service.cilium.io/shared=true --overwrite
-  kubectl --context $CLUSTER1 -n redis-system annotate service my-release-redis-cluster-1-svc service.cilium.io/shared=true --overwrite
-  kubectl --context $CLUSTER1 -n redis-system annotate service my-release-redis-cluster-2-svc service.cilium.io/shared=true --overwrite
-  kubectl --context $CLUSTER1 -n redis-system annotate service my-release-redis-cluster-3-svc service.cilium.io/shared=true --overwrite
-  kubectl --context $CLUSTER1 -n redis-system annotate service my-release-redis-cluster-4-svc service.cilium.io/shared=true --overwrite
-  kubectl --context $CLUSTER1 -n redis-system annotate service my-release-redis-cluster-5-svc service.cilium.io/shared=true --overwrite
+$ kubectl --context $CLUSTER1 -n redis-system annotate service my-release-redis-cluster       service.cilium.io/shared=false --overwrite
+  kubectl --context $CLUSTER1 -n redis-system annotate service my-release-redis-cluster-0-svc service.cilium.io/shared=false --overwrite
+  kubectl --context $CLUSTER1 -n redis-system annotate service my-release-redis-cluster-1-svc service.cilium.io/shared=false --overwrite
+  kubectl --context $CLUSTER1 -n redis-system annotate service my-release-redis-cluster-2-svc service.cilium.io/shared=false --overwrite
+  kubectl --context $CLUSTER1 -n redis-system annotate service my-release-redis-cluster-3-svc service.cilium.io/shared=false --overwrite
+  kubectl --context $CLUSTER1 -n redis-system annotate service my-release-redis-cluster-4-svc service.cilium.io/shared=false --overwrite
+  kubectl --context $CLUSTER1 -n redis-system annotate service my-release-redis-cluster-5-svc service.cilium.io/shared=false --overwrite
 
 
 
@@ -2399,7 +2394,7 @@ $ kubectl --context $CLUSTER1 -n redis-system \
 
 
 
-#### IP Mapping 현황 확인
+#### IP Mapping Table 현황 확인
 
 IP Mapping이 실시간으로 update 된다.  서비스에 해당되는 IP 를 확인한다.
 
@@ -2443,12 +2438,6 @@ $ kubectl exec -n kube-system -ti ds/cilium -- cilium service list --clustermesh
 
 
 ```
-
-
-
-
-
-
 
 
 
@@ -2504,8 +2493,6 @@ I have no name!@redis-client-69dcc9c76d-rgtgx:/$    # <-- 이런 Prompt 가 나�
 # curl: (52) Empty reply from server
 
 
-
-
 $ curl my-release-redis-cluster-0-svc:6379
   curl my-release-redis-cluster-1-svc:6379
   curl my-release-redis-cluster-2-svc:6379
@@ -2514,14 +2501,6 @@ $ curl my-release-redis-cluster-0-svc:6379
   curl my-release-redis-cluster-5-svc:6379
 
 ```
-
-
-
-
-
-
-
-
 
 
 
@@ -2580,10 +2559,6 @@ total_cluster_links_buffer_limit_exceeded:0
 
 
 
-
-
-
-
 ### (7) Clean Up
 
 ```sh
@@ -2606,8 +2581,6 @@ $ kubectl delete namespace redis-system
 $ helm -n redis-system ls
 $ kubectl -n redis-system get all
 ```
-
-
 
 
 
