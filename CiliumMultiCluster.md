@@ -1,4 +1,4 @@
-# cilium
+# Cilium MultiCluster
 
 kubernetes CNI Plugin cilium, cilium 을 활용한 multiClustering 
 
@@ -10,115 +10,40 @@ kubernetes CNI Plugin cilium, cilium 을 활용한 multiClustering
 
 
 
+# 1. 개요
 
-
-# 1. k3s 설치
-
-
-
-## 1) k3s 설치
-
-### (1) master node
+Cilium Cluster Mesh를 통해 멀티 클러스터를 원할하게 연결할 수 있다.
 
 
 
-```sh
-# root 권한으로 수행
-$ su
-
-
-# master01에서
-# $ curl -sfL https://get.k3s.io | sh -s - --write-kubeconfig-mode 644 --cluster-init
-
-$ curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC='--flannel-backend=none --disable-network-policy' sh -s - --write-kubeconfig-mode 644 --cluster-init
-
-
-
-# 확인
-$ kubectl version
-Client Version: version.Info{Major:"1", Minor:"27", GitVersion:"v1.27.4+k3s1", GitCommit:"36645e7311e9bdbbf2adb79ecd8bd68556bc86f6", GitTreeState:"clean", BuildDate:"2023-07-28T09:46:04Z", GoVersion:"go1.20.6", Compiler:"gc", Platform:"linux/amd64"}
-Kustomize Version: v5.0.1
-Server Version: version.Info{Major:"1", Minor:"27", GitVersion:"v1.27.4+k3s1", GitCommit:"36645e7311e9bdbbf2adb79ecd8bd68556bc86f6", GitTreeState:"clean", BuildDate:"2023-07-28T09:46:04Z", GoVersion:"go1.20.6", Compiler:"gc", Platform:"linux/amd64"}
-
-
-
-$ export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
-
-```
+* 클러스터별 Cilium을 CNI로 실행
+* 각 클러스터의 포드가 메시의 다른 모든 클러스터에 있는 서비스를 검색하고 액세스할 수 있는 있음
+* 여러 클러스터를 대규모 통합 네트워크에 효과적으로 결합할 수 있음
 
 
 
 
 
-### (2) kubeconfig 설정
+## Cluster별 HA 구성
 
-일반 User가 직접 kubctl 명령 실행을 위해서는 kube config 정보(~/.kube/config) 가 필요하다.
-
-k3s 를 설치하면 /etc/rancher/k3s/k3s.yaml 에 정보가 존재하므로 이를 복사한다. 또한 모든 사용자가 읽을 수 있도록 권한을 부여 한다.
-
-```sh
-## root 로 실행
-$ su
-
-$ ll /etc/rancher/k3s/k3s.yaml
--rw------- 1 root root 2961 May 14 03:23 /etc/rancher/k3s/k3s.yaml
-
-# 모든 사용자에게 읽기권한 부여
-$ chmod +r /etc/rancher/k3s/k3s.yaml
-
-$ ll /etc/rancher/k3s/k3s.yaml
--rw-r--r-- 1 root root 2961 May 14 03:23 /etc/rancher/k3s/k3s.yaml
-
-# 일반 user 로 전환
-$ exit
+* 클러스터간 동일한 Namespace 를 가진 서비스를 글로벌 서비스로 자동  병합 함
 
 
 
-
-## 사용자 권한으로 실행
-
-$ mkdir -p ~/.kube
-
-$ cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
-
-$ ll ~/.kube/config
--rw-r--r-- 1 song song 2957 May 14 03:44 /home/song/.kube/config
-
-# 자신만 RW 권한 부여
-$ chmod 600 ~/.kube/config
-
-$ ls -ltr ~/.kube/config
--rw------- 1 ktdseduuser ktdseduuser 2957 May 13 14:35 /home/ktdseduuser/.kube/config
+![다중 클러스터 그림](CiliumMultiCluster.assets/clustermesh-2-39e9ebcad6babe51bfd318eb85f3da28.webp)
 
 
 
-## 확인
-$ kubectl version
-Client Version: version.Info{Major:"1", Minor:"26", GitVersion:"v1.26.5+k3s1", GitCommit:"7cefebeaac7dbdd0bfec131ea7a43a45cb125354", GitTreeState:"clean", BuildDate:"2023-05-27T00:05:40Z", GoVersion:"go1.19.9", Compiler:"gc", Platform:"linux/amd64"}
-Kustomize Version: v4.5.7
-Server Version: version.Info{Major:"1", Minor:"26", GitVersion:"v1.26.5+k3s1", GitCommit:"7cefebeaac7dbdd0bfec131ea7a43a45cb125354", GitTreeState:"clean", BuildDate:"2023-05-27T00:05:40Z", GoVersion:"go1.19.9", Compiler:"gc", Platform:"linux/amd64"}
-```
+* 클러스터내 서비스별로 작동 여부를 동적으로 설정 가능
+  * 업그레이드를 위해 일시적으로 오프라인을 유지해야 하는 경우 
+  * 리소스를 부족과 같은 일부 서비스의 장애와 같은 경우
+  * 각 클러스터내 서비스의 접근을 동적으로 조정할 수 있다. 
 
 
 
-root 권한자가 아닌 다른 사용자도 사용하려면 위와 동일하게 수행해야한다.
+![다중 클러스터 그림](CiliumMultiCluster.assets/clustermesh-1-984767ca705b693437c8a83be4585557.png)
 
 
-
-
-
-
-
-
-
-### clean up
-
-```sh
-## uninstall
-$ sh /usr/local/bin/k3s-killall.sh
-  sh /usr/local/bin/k3s-uninstall.sh
-
-```
 
 
 
@@ -137,6 +62,8 @@ $ mkdir -p ~/song/cilium
   cd ~/song/cilium
 
 $ CILIUM_CLI_VERSION=$(curl -s https://raw.githubusercontent.com/cilium/cilium-cli/main/stable.txt)
+# v0.15.8 - 2023.09.17 시점
+
 
 $ CLI_ARCH=amd64
 
@@ -155,7 +82,6 @@ $ cilium version --client
 cilium-cli: v0.15.8 compiled with go1.21.0 on linux/amd64
 cilium image (default): v1.14.1
 cilium image (stable): v1.14.1
-
 
 
 
@@ -250,7 +176,6 @@ users:
 ---
 
 
-
 ```
 
 
@@ -294,8 +219,6 @@ $ export CLUSTER1=bastion02
 
 
 
-
-
 #### 확인
 
 ```sh
@@ -309,9 +232,7 @@ $ kubectl --context $CLUSTER2 -n kube-system get svc
 
 
 
-
-
-## 3) cilium install
+## 3) Cilium Install
 
 ### (1) Cluster1
 
@@ -403,8 +324,6 @@ Image versions         cilium                   quay.io/cilium/cilium:v1.14.1@sh
 
 
 
-
-
 ### [참고] 다른 명령어
 
 ```sh
@@ -438,7 +357,8 @@ cilium hubble enable --context $CLUSTER1 \
 ### (4) clean up
 
 ```sh
-# 
+
+# cilium 삭제시... 
 $ cilium uninstall
 🔥 Deleting pods in cilium-test namespace...
 🔥 Deleting cilium-test namespace...
@@ -449,13 +369,8 @@ $ cilium status --wait
 
 
 
-# --test-namespace 옵션을 주고 uninstall 해도 모두 삭제 된다.
-
+# [참고] --test-namespace 옵션을 주고 uninstall 해도 모두 삭제 된다.
 $ cilium  --context $CLUSTER1 uninstall --test-namespace cilium-test
-
-$ cilium  --context $CLUSTER2 uninstall --test-namespace cilium-test
-
-
 
 ```
 
@@ -463,11 +378,11 @@ $ cilium  --context $CLUSTER2 uninstall --test-namespace cilium-test
 
 
 
-## 5) Cluster mesh 연결 및 확인
+## 4) Cluster Mesh 설정 및 Cluster 연결
 
 
 
-### cilium clustermesh enable
+### Cilium Cluster Mesh Enable
 
 
 
@@ -492,7 +407,6 @@ $ cilium clustermesh status --context $CLUSTER1
 
 ## cluster2
 
-
 $ cilium clustermesh enable --context $CLUSTER2 --service-type=NodePort
 
 
@@ -513,7 +427,7 @@ $ cilium clustermesh status --context $CLUSTER1
 
 
 
-### 클러스터 연결
+### Cluster 연결
 
 클러스터 연결은 한방향으로 수행하지만 자동으로 양방향 설정 된다.
 
@@ -537,8 +451,6 @@ $ cilium clustermesh connect --context $CLUSTER1 --destination-context $CLUSTER2
 ℹ️ Configuring Cilium in cluster 'bastion02' to connect to cluster 'bastion03'
 ℹ️ Configuring Cilium in cluster 'bastion03' to connect to cluster 'bastion02'
 ✅ Connected cluster bastion02 and bastion03!
-
-
 
 
 
@@ -568,12 +480,14 @@ $ cilium clustermesh status --context $CLUSTER1 --wait
 # test deploy 및 test 수행
 $ cilium connectivity test --context $CLUSTER1 --multi-cluster $CLUSTER2
 
+# 각종 deployment / pod / svc 들이 설치된다.
+
+
 
 # 수작업 테스트
 # 
 curl -i echo-other-node:8080
 curl -i echo-same-node:8080
-
 
 ```
 
@@ -599,8 +513,6 @@ $ cilium clustermesh status
 
 
 ## 1) sample app
-
-
 
 
 
@@ -794,13 +706,7 @@ EOF
 
 
 
-
-
 ### 확인
-
-
-
-
 
 ```sh
 service, pod ip 확인
@@ -830,10 +736,7 @@ kubectl --context=mk-mig exec -n kube-system -ti ds/cilium -- cilium service lis
 #                                           2 => 10.0.0.124:80 (active)
 
 
-
 ```
-
-
 
 
 

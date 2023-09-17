@@ -15,3 +15,9 @@ kubernetes CNI Plugin cilium, cilium 을 활용한 multiClustering
 
 
 
+# 9. [별첨]  Kubernetes 설치 ( [문서보기](./K3sSetting.md) )
+
+
+
+
+
