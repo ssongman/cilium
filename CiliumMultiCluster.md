@@ -73,7 +73,7 @@ https://kubernetes.io/docs/tasks/administer-cluster/network-policy-provider/
 
 
 
-# 2. cilium
+# 2. Cilium
 
 
 
@@ -2583,4 +2583,91 @@ $ kubectl -n redis-system get all
 ```
 
 
+
+
+
+# 4. Cilium Install at Offline
+
+
+
+
+
+## 1) Install 준비
+
+### (1) helm chart 확인
+
+cilium install 과정은 helm chart 로 install 하는 방식과 동일하다.
+
+그러므로 아래 site 에서 values.yaml 을 참고한다.
+
+```sh
+https://github.com/cilium/cilium/blob/v1.14.2/install/kubernetes/cilium/values.yaml
+
+
+
+```
+
+
+
+### (2) dry run
+
+online 에서 dry run 으로 수행후 script 를 확인한다.
+
+```sh
+
+# dry-run
+$ cilium install  \
+  --set cluster.id=1 \
+  --set cluster.name=cluster1 \
+  --version 1.14.1 \
+  --dry-run
+
+# 필요한 container image들 check
+
+        image: "docker.io/cilium/cilium:1.14.1@sha256:edc1d05ea1365c4a8f6ac6982247d5c145181704894bb698619c3827b6963a72"
+        image: "docker.io/cilium/cilium-generic:1.14.1@sha256:e061de0a930534c7e3f8feda8330976367971238ccafff42659f104effd4b5f7"
+
+```
+
+
+
+
+
+### (3) container image import
+
+```sh
+
+
+# 필요한 image들 import
+
+        image: "docker.io/cilium/cilium:1.14.1@sha256:edc1d05ea1365c4a8f6ac6982247d5c145181704894bb698619c3827b6963a72"
+        image: "docker.io/cilium/cilium-generic:1.14.1@sha256:e061de0a930534c7e3f8feda8330976367971238ccafff42659f104effd4b5f7"
+
+
+# docker tag...
+
+# docker push ....
+
+
+```
+
+
+
+
+
+## 2) Install at offline
+
+```sh
+
+$ cilium install  \
+  --set cluster.id=1 \
+  --set cluster.name=cluster1 \
+  --version 1.14.1 \
+  --set image.repository=docker.io/cilium/cilium \
+  --set image.tag=1.14.1 \
+  --set operator.image.repository=docker.io/cilium/cilium \
+  --set operator.image.tag=1.14.1 \
+  --dry-run
+
+```
 
